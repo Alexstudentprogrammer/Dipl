@@ -13,6 +13,39 @@ from torch.utils.data.dataset import Dataset
 from coordconv import CoordConv2d
 
 
+def concat_map(tensor1, tensor2):
+    print(tensor1.size(), tensor2.size())
+    return torch.cat((tensor1, tensor2), 1)
+
+
+def prepare_map():
+    x = 0
+    y = 0
+    array = np.zeros((340, 450))
+
+    counter = 1
+    for i in range(790):
+        tmp_x = x
+        tmp_y = y
+        while tmp_x >= 0 and tmp_y < 340:
+            array[tmp_y][tmp_x] = counter / 700
+            counter += 1
+            tmp_x -= 1
+            tmp_y += 1
+
+        if x < 449:
+            x += 1
+            tmp_y = 0
+        else:
+            y += 1
+            tmp_y = y
+        tmp_x = x
+    # array = [[array], [array], [array], [array], [array]]  for model_train
+    array = [[array]]
+    array = np.array(array)
+    return array
+
+
 def perform_Transformation(image, M, ans):
     dst = cv2.warpPerspective(image, M, (225, 170))
 
@@ -27,6 +60,7 @@ def perform_Transformation(image, M, ans):
     plt.axis('off')
     plt.title("Transformed Image")
     plt.show()
+
 
 class CustomTensorDataset(Dataset):
     def __init__(self, file_paths):
@@ -79,10 +113,15 @@ test_ans_img_loader = DataLoader(test_ans_img_data, batch_size=1, shuffle=False)
 class NN(nn.Module):
     def __init__(self):
         super(NN, self).__init__()
+        self.conv_map = torch.Tensor(prepare_map())
+        self.conv_map = self.conv_map.to(device)
 
         self.pool = nn.MaxPool2d(2)
 
-        self.coord = CoordConv2d(6, 10, 1, use_cuda=True, with_r=True)
+        # self.coord = CoordConv2d(6, 10, 1, use_cuda=True, with_r=True)
+        self.hom_conv = nn.Sequential(
+            nn.Conv2d(7, 10, 1),
+        )
 
         self.encode1 = nn.Sequential(
             nn.Conv2d(10, 80, 3, padding=1),
@@ -106,7 +145,9 @@ class NN(nn.Module):
         self.fc2 = nn.Linear(150, 8)
 
     def forward(self, X):
-        X = self.coord(X)
+        #  X = self.coord(X)
+        X = concat_map(self.conv_map, X)
+        X = self.hom_conv(X)
 
         X = self.encode1(X)
         X = self.encode1_2(X)
@@ -121,46 +162,46 @@ class NN(nn.Module):
 
 
 model = NN().to(device)
-model.load_state_dict(torch.load('hom_approximation_v2_test.pth'))
+model.load_state_dict(torch.load('hom_approximation_v3.pth'))
 criterion = nn.L1Loss(reduction='sum')
 
-# learning_rate = 0.0005
-# epochs = 9
-# for i in range(epochs):
-#
-#     if epochs == 1:
-#         learning_rate = 0.00003
-#     elif epochs == 4:
-#         learning_rate = 0.000007
-#     elif epochs == 6:
-#         learning_rate = 0.000001
-#
-#     optimizer = t.optim.SGD(model.parameters(), lr=learning_rate, weight_decay=0.0001)
-#     total_loss = 0
-#     counter = 0
-#
-#     for b, (dataloders, mask) in enumerate(zip(train_loader, ans_loader)):
-#
-#         b += 1
-#         counter += 1
-#         print(counter)
-#         dataloders = dataloders.to(device)
-#         mask = mask.to(device)
-#
-#         y_pred = model(dataloders).to(device)
-#
-#         loss = criterion(y_pred, mask)
-#         total_loss += loss.item()
-#
-#         if counter % 100 == 0:
-#             print("current loss: ", loss, b, i)
-#
-#         optimizer.zero_grad()
-#         loss.backward()
-#         optimizer.step()
-#
-#     torch.save(model.state_dict(), 'hom_approximation_v2_test.pth')
-#     print(total_loss / 4000)
+learning_rate = 0.0005
+epochs = 8
+for i in range(4, epochs):
+
+    if epochs == 1:
+        learning_rate = 0.00003
+    elif epochs == 4:
+        learning_rate = 0.000007
+    elif epochs == 6:
+        learning_rate = 0.000001
+
+    optimizer = t.optim.SGD(model.parameters(), lr=learning_rate, weight_decay=0.0001)
+    total_loss = 0
+    counter = 0
+
+    for b, (dataloders, mask) in enumerate(zip(train_loader, ans_loader)):
+
+        b += 1
+        counter += 1
+        print(counter)
+        dataloders = dataloders.to(device)
+        mask = mask.to(device)
+
+        y_pred = model(dataloders).to(device)
+
+        loss = criterion(y_pred, mask)
+        total_loss += loss.item()
+
+        if counter % 100 == 0:
+            print("current loss: ", loss, b, i)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    torch.save(model.state_dict(), 'hom__approximation_v3.pth')
+    print(total_loss / 4000)
 
 # point 1
 x_1 = 145
@@ -217,16 +258,16 @@ for b, (data, mask, mask_img) in enumerate(zip(test_loader, test_ans_loader, tes
     predicted_point_x = new_point_homogen[0] / new_point_homogen[2]
     predicted_point_y = new_point_homogen[1] / new_point_homogen[2]
 
-    error = ((float(abs(predicted_point_x - ans_x))**2 + float(abs(predicted_point_y - ans_y)))**2)**0.5
-    # print(((float(abs(predicted_point_x - ans_x))**2 + float(abs(predicted_point_y - ans_y)))**2)**0.5)
-    data = data.cpu().detach().numpy()
-    data = data[0]
-
-    data = np.transpose(data, (1, 2, 0))
-    if error < 1000:
+    error = ((float(abs(predicted_point_x - ans_x)) ** 2 + float(abs(predicted_point_y - ans_y))) ** 2) ** 0.5
+    print(((float(abs(predicted_point_x - ans_x)) ** 2 + float(abs(predicted_point_y - ans_y))) ** 2) ** 0.5)
+    # dataloders = dataloders.cpu().detach().numpy()
+    # dataloders = dataloders[0]
+    #
+    # dataloders = np.transpose(dataloders, (1, 2, 0))
+    if error > 0:
         graph.append(error)
         total_loss_test += error
-        
-print("Mean error: ", total_loss_test / 999)
+
+print("Mean error: ", total_loss_test / 1000)
 plt.plot(graph)
 plt.show()
